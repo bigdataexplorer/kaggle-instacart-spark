@@ -1,9 +1,12 @@
 package wsc.bigdata.spark
 
+import org.apache.log4j.{Level, Logger}
 import org.apache.spark.sql.SQLContext
 import org.apache.spark.{SparkContext, SparkConf}
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.expressions.Window
+import org.apache.spark.sql.hive.HiveContext
+
 
 /**
  * Created by weishungchung on 7/2/17.
@@ -12,7 +15,11 @@ object AnalyzeInstaCartData {
   def main(args:Array[String]):Unit = {
     val conf = new SparkConf().setAppName("Analyzing Instacart Data")
     val sc = new SparkContext(conf)
-    val sqlContext = new SQLContext(sc)
+    val sqlContext = new HiveContext(sc)
+    //val sqlContext = new HiveContext(sc)
+
+    val rootLogger = Logger.getRootLogger()
+    rootLogger.setLevel(Level.ERROR)
 
     //load departments data
     val departmentDataInputPath = args(0)
@@ -33,6 +40,9 @@ object AnalyzeInstaCartData {
     val orderDataInputPath = args(3)
     val orders = sqlContext.read.format("com.databricks.spark.csv").option("header","true").option("inferSchema","true").load(orderDataInputPath)
     orders.printSchema()
+
+    //load train data
+    val trainDataInputPath = args(4)
 
     //group by hour of day
     val groupByHourOfDay = orders.groupBy("order_hour_of_day").count().sort(desc("count"))
@@ -61,5 +71,19 @@ object AnalyzeInstaCartData {
     val windowSpec = Window.partitionBy("user_id").orderBy(desc("count"))
     val userReorderPeriod = groupByUserIdPriorOrder.withColumn("row",rowNumber().over(windowSpec)).filter("row =1").drop("row")
     userReorderPeriod.show()
+
+    val trainData = sqlContext.read.format("com.databricks.spark.csv").option("header","true").option("inferSchema","true").load(trainDataInputPath)
+    trainData.printSchema()
+    
+    val orderProductUser = trainData.join(orders, trainData("order_id") === orders("order_id"))
+    //val orderProductJoin = trainData.join(products, trainData("product_id") === products("product_id"))
+    val groupByProduct = trainData.groupBy("product_id").count().sort(desc("count"))
+    groupByProduct.join(products.select("product_id", "product_name"), groupByProduct("product_id") === products("product_id")).sort(desc("count")).show(false)
+
+    val groupByUserProduct = orderProductUser.groupBy("user_id","product_id").count().sort(asc("user_id"),desc("count"))
+    val windowSpecByUserProduct = Window.partitionBy("user_id").orderBy(desc("count"))
+    val userPopularProduct = groupByUserProduct.withColumn("row",rowNumber().over(windowSpecByUserProduct)).filter("row =1").drop("row")
+    userPopularProduct.filter("count > 1")
+
   }
 }
